@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "photocull"
+version = "0.1.0"
+description = "Fast photo culling app for NAS photo libraries"
+requires-python = ">=3.11"
+dependencies = [
+    "rawpy>=0.19",
+    "Pillow>=10.0",
+    "exifread>=3.0",
+    "fastapi>=0.104",
+    "uvicorn[standard]>=0.24",
+    "typer[all]>=0.9",
+    "tqdm>=4.66",
+    "xxhash>=3.4",
+]
+
+[project.scripts]
+photocull = "photocull.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["."]
