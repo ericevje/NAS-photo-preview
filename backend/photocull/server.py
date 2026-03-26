@@ -3,17 +3,23 @@
 import os
 import shutil
 import sqlite3
+import subprocess
+import threading
+import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from photocull.db import get_connection
+from photocull.db import get_connection, init_db
+from photocull.indexer import index_photos
 
 # ---------------------------------------------------------------------------
 # Config from environment (set by cli.py before uvicorn starts)
@@ -128,10 +134,79 @@ class BatchUpdate(BaseModel):
     updates: PhotoUpdate
 
 
-class ExportRequest(BaseModel):
-    filter: dict[str, Any] = {}
-    mode: str = "list"  # "list" or "copy"
-    dest: str | None = None
+class ExportFilters(BaseModel):
+    date_from: str | None = None
+    date_to: str | None = None
+    has_gps: bool | None = None
+    rating_min: int | None = None
+    label: str | None = None
+    flagged: bool | None = None
+    rejected: bool | None = None
+    folder: str | None = None
+
+
+class ExportListRequest(BaseModel):
+    filters: ExportFilters | None = None
+    photo_ids: list[int] | None = None
+
+
+class ExportCopyRequest(BaseModel):
+    filters: ExportFilters | None = None
+    photo_ids: list[int] | None = None
+    dest: str
+    include_xmp: bool = True
+
+
+class ImportStartRequest(BaseModel):
+    source_dir: str
+    incremental: bool = True
+
+
+# ---------------------------------------------------------------------------
+# XMP sidecar generation
+# ---------------------------------------------------------------------------
+
+_XMP_TEMPLATE = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/rdf-syntax-ns#">
+    <rdf:Description
+      xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+{attrs}
+    />
+  </rdf:RDF>
+</x:xmpmeta>
+"""
+
+
+def _generate_xmp(rating: int | None, label: str | None) -> str | None:
+    """Generate minimal XMP sidecar content for Lightroom Classic.
+
+    Returns None if no meaningful metadata to write.
+    """
+    attrs = []
+    if rating and rating > 0:
+        attrs.append(f'      xmp:Rating="{rating}"')
+    if label:
+        attrs.append(f'      xmp:Label="{label.capitalize()}"')
+    if not attrs:
+        return None
+    return _XMP_TEMPLATE.format(attrs="\n".join(attrs))
+
+
+# ---------------------------------------------------------------------------
+# Background export job tracking
+# ---------------------------------------------------------------------------
+
+_export_jobs: dict[str, dict[str, Any]] = {}
+_export_jobs_lock = threading.Lock()
+
+# ---------------------------------------------------------------------------
+# Background import job tracking (single job at a time)
+# ---------------------------------------------------------------------------
+
+_import_job: dict[str, Any] | None = None
+_import_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -352,52 +427,274 @@ def get_folders():
         conn.close()
 
 
-@app.post("/api/export")
-def export_photos(body: ExportRequest):
-    """Export filtered photos as a file list or copy to a destination folder."""
+def _build_export_where(
+    filters: ExportFilters | None,
+    photo_ids: list[int] | None,
+) -> tuple[str, list[Any]]:
+    """Build a WHERE clause from export filters or explicit IDs."""
+    conditions: list[str] = []
+    params: list[Any] = []
+
+    if photo_ids:
+        placeholders = ", ".join("?" for _ in photo_ids)
+        conditions.append(f"id IN ({placeholders})")
+        params.extend(photo_ids)
+    else:
+        filt = filters or ExportFilters()
+        if filt.date_from:
+            conditions.append("date_taken >= ?")
+            params.append(filt.date_from)
+        if filt.date_to:
+            conditions.append("date_taken <= ?")
+            params.append(filt.date_to)
+        if filt.has_gps is True:
+            conditions.append("gps_lat IS NOT NULL AND gps_lon IS NOT NULL")
+        if filt.rating_min is not None:
+            conditions.append("rating >= ?")
+            params.append(filt.rating_min)
+        if filt.label is not None:
+            conditions.append("label = ?")
+            params.append(filt.label)
+        if filt.flagged is not None:
+            conditions.append("flagged = ?")
+            params.append(int(filt.flagged))
+        if filt.rejected is not None:
+            conditions.append("rejected = ?")
+            params.append(int(filt.rejected))
+        else:
+            conditions.append("rejected = 0")
+        if filt.folder:
+            conditions.append("folder LIKE ?")
+            params.append(f"%{filt.folder}%")
+
+    where = " AND ".join(conditions) if conditions else "1"
+    return where, params
+
+
+@app.get("/api/export/default-dest")
+def export_default_dest():
+    """Return a default export destination path based on current timestamp."""
+    ts = datetime.now().strftime("%Y%m%d-%H:%M:%S")
+    pictures = Path.home() / "Pictures" / ts
+    return {"path": str(pictures)}
+
+
+@app.post("/api/export/browse")
+def export_browse():
+    """Open a native macOS folder picker dialog. Returns the selected path."""
+    try:
+        result = subprocess.run(
+            [
+                "osascript",
+                "-e",
+                'POSIX path of (choose folder with prompt "Select export destination")',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if result.returncode != 0:
+            # User cancelled the dialog
+            return {"path": None}
+        return {"path": result.stdout.strip().rstrip("/")}
+    except subprocess.TimeoutExpired:
+        return {"path": None}
+
+
+@app.post("/api/export/count")
+def export_count(body: ExportListRequest):
+    """Return the count of photos that would be exported."""
     conn = _get_db()
     try:
-        conditions: list[str] = []
-        params: list[Any] = []
+        where, params = _build_export_where(body.filters, body.photo_ids)
+        count = conn.execute(
+            f"SELECT COUNT(*) FROM photos WHERE {where}", params
+        ).fetchone()[0]
+        return {"count": count}
+    finally:
+        conn.close()
 
-        filt = body.filter
-        if filt.get("flagged"):
-            conditions.append("flagged = 1")
-        if filt.get("rating_min") is not None:
-            conditions.append("rating >= ?")
-            params.append(filt["rating_min"])
-        if filt.get("label"):
-            conditions.append("label = ?")
-            params.append(filt["label"])
-        if filt.get("rejected") is not None:
-            conditions.append("rejected = ?")
-            params.append(int(filt["rejected"]))
-        else:
-            # Default: exclude rejected
-            conditions.append("rejected = 0")
 
-        where = " AND ".join(conditions) if conditions else "1"
+@app.post("/api/export/list")
+def export_list(body: ExportListRequest):
+    """Return a downloadable .txt file with one NAS file_path per line."""
+    conn = _get_db()
+    try:
+        where, params = _build_export_where(body.filters, body.photo_ids)
         rows = conn.execute(
             f"SELECT file_path FROM photos WHERE {where} ORDER BY date_taken",
             params,
         ).fetchall()
-
         paths = [row["file_path"] for row in rows]
-
-        if body.mode == "copy":
-            if not body.dest:
-                raise HTTPException(status_code=400, detail="dest is required for copy mode")
-            dest_dir = Path(body.dest)
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            copied = 0
-            for p in paths:
-                src = Path(p)
-                if src.exists():
-                    shutil.copy2(src, dest_dir / src.name)
-                    copied += 1
-            return {"mode": "copy", "count": copied, "dest": str(dest_dir)}
-
-        # mode == "list"
-        return {"mode": "list", "count": len(paths), "paths": paths}
+        content = "\n".join(paths) + ("\n" if paths else "")
+        return PlainTextResponse(
+            content=content,
+            media_type="text/plain",
+            headers={"Content-Disposition": "attachment; filename=export-paths.txt"},
+        )
     finally:
         conn.close()
+
+
+@app.post("/api/export/copy")
+def export_copy(body: ExportCopyRequest):
+    """Start a background copy job. Returns a job_id to poll for progress."""
+    # Resolve photo data from DB first
+    conn = _get_db()
+    try:
+        where, params = _build_export_where(body.filters, body.photo_ids)
+        rows_raw = conn.execute(
+            f"SELECT file_path, rating, label FROM photos WHERE {where} ORDER BY date_taken",
+            params,
+        ).fetchall()
+        # Convert to plain dicts — sqlite3.Row objects aren't safe across threads
+        photo_rows = [dict(row) for row in rows_raw]
+    finally:
+        conn.close()
+
+    if not photo_rows:
+        raise HTTPException(status_code=400, detail="No photos match the export criteria")
+
+    include_xmp = body.include_xmp
+    job_id = str(uuid.uuid4())
+    job: dict[str, Any] = {
+        "status": "running",
+        "total": len(photo_rows),
+        "copied": 0,
+        "failed": 0,
+        "dest": body.dest,
+    }
+    with _export_jobs_lock:
+        _export_jobs[job_id] = job
+
+    def _do_copy():
+        dest_dir = Path(body.dest)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        for row in photo_rows:
+            src = Path(row["file_path"])
+            try:
+                if src.exists():
+                    shutil.copy2(src, dest_dir / src.name)
+                    if include_xmp:
+                        xmp_content = _generate_xmp(row["rating"], row["label"])
+                        if xmp_content:
+                            xmp_path = dest_dir / (src.stem + ".xmp")
+                            xmp_path.write_text(xmp_content, encoding="utf-8")
+                    job["copied"] += 1
+                else:
+                    job["failed"] += 1
+            except OSError:
+                job["failed"] += 1
+        job["status"] = "done"
+
+    thread = threading.Thread(target=_do_copy, daemon=True)
+    thread.start()
+
+    return {"job_id": job_id, "total": len(photo_rows)}
+
+
+@app.get("/api/export/status/{job_id}")
+def export_status(job_id: str):
+    """Poll progress of a background copy job."""
+    with _export_jobs_lock:
+        job = _export_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+# ---------------------------------------------------------------------------
+# Import endpoints — browse NAS folders and trigger indexing from the UI
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/import/browse")
+def import_browse():
+    """Open a native macOS folder picker dialog for selecting a NAS folder to import."""
+    try:
+        result = subprocess.run(
+            [
+                "osascript",
+                "-e",
+                'POSIX path of (choose folder with prompt "Select folder to import")',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if result.returncode != 0:
+            return {"path": None}
+        return {"path": result.stdout.strip().rstrip("/")}
+    except subprocess.TimeoutExpired:
+        return {"path": None}
+
+
+@app.post("/api/import/start")
+def import_start(body: ImportStartRequest):
+    """Start a background indexing job. Only one import can run at a time."""
+    global _import_job
+
+    source = Path(body.source_dir)
+    if not source.is_dir():
+        raise HTTPException(status_code=400, detail=f"Directory not found: {body.source_dir}")
+
+    with _import_lock:
+        if _import_job and _import_job.get("status") == "running":
+            raise HTTPException(status_code=409, detail="An import is already running")
+        job: dict[str, Any] = {
+            "status": "running",
+            "phase": "scanning",
+            "source_dir": body.source_dir,
+            "processed": 0,
+            "skipped": 0,
+            "total": 0,
+            "error": None,
+        }
+        _import_job = job
+
+    def _do_import():
+        try:
+            conn = get_connection(_db_path)
+            try:
+                init_db(conn)
+
+                def _on_progress(processed: int, skipped: int, total: int, done: bool):
+                    job["processed"] = processed
+                    job["skipped"] = skipped
+                    job["total"] = total
+                    if total > 0:
+                        job["phase"] = "indexing"
+                    if done:
+                        job["status"] = "done"
+                        job["phase"] = "done"
+
+                index_photos(
+                    source_dirs=[source],
+                    db_conn=conn,
+                    thumbs_dir=Path(_thumbs_path),
+                    incremental=body.incremental,
+                    workers=4,
+                    progress_callback=_on_progress,
+                )
+                # Ensure status is set even if callback already set it
+                job["status"] = "done"
+                job["phase"] = "done"
+            finally:
+                conn.close()
+        except Exception as e:
+            job["status"] = "error"
+            job["phase"] = "error"
+            job["error"] = str(e)
+
+    thread = threading.Thread(target=_do_import, daemon=True)
+    thread.start()
+
+    return {"status": "started", "source_dir": body.source_dir}
+
+
+@app.get("/api/import/status")
+def import_status():
+    """Return the current import job status, or idle if none."""
+    if _import_job is None:
+        return {"status": "idle"}
+    return _import_job

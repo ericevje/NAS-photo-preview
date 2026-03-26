@@ -22,6 +22,16 @@ interface PhotoStore {
   openLoupe: (id: number) => void;
   closeLoupe: () => void;
 
+  // Export panel
+  exportOpen: boolean;
+  openExport: () => void;
+  closeExport: () => void;
+
+  // Import panel
+  importOpen: boolean;
+  openImport: () => void;
+  closeImport: () => void;
+
   // Filters
   filters: PhotoFilters;
   setFilters: (f: Partial<PhotoFilters>) => void;
@@ -66,6 +76,14 @@ export const usePhotoStore = create<PhotoStore>((set) => ({
   loupePhotoId: null,
   openLoupe: (id) => set({ loupePhotoId: id }),
   closeLoupe: () => set({ loupePhotoId: null }),
+
+  exportOpen: false,
+  openExport: () => set({ exportOpen: true }),
+  closeExport: () => set({ exportOpen: false }),
+
+  importOpen: false,
+  openImport: () => set({ importOpen: true }),
+  closeImport: () => set({ importOpen: false }),
 
   filters: { ...DEFAULT_FILTERS },
   setFilters: (f) => set((s) => ({ filters: { ...s.filters, ...f } })),

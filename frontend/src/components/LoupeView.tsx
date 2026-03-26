@@ -132,7 +132,7 @@ export default function LoupeView() {
       </div>
 
       {/* Bottom info bar */}
-      <div className="flex flex-wrap items-center gap-4 border-t border-neutral-800 bg-neutral-900/90 px-6 py-3 text-sm">
+      <div className="flex flex-wrap items-center gap-3 border-t border-neutral-800 bg-neutral-900/90 px-4 py-2 text-xs sm:gap-4 sm:px-6 sm:py-3 sm:text-sm">
         {/* File info */}
         <span className="font-medium text-neutral-200">{photo.file_name}</span>
         {photo.date_taken && (

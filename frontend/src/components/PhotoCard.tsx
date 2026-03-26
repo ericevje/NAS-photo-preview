@@ -14,12 +14,14 @@ interface PhotoCardProps {
   selected: boolean;
   onClick: (e: React.MouseEvent) => void;
   onDoubleClick: () => void;
+  onToggleFlag?: () => void;
+  onToggleReject?: () => void;
 }
 
-export default function PhotoCard({ photo, selected, onClick, onDoubleClick }: PhotoCardProps) {
+export default function PhotoCard({ photo, selected, onClick, onDoubleClick, onToggleFlag, onToggleReject }: PhotoCardProps) {
   return (
     <div
-      className={`relative cursor-pointer overflow-hidden rounded bg-neutral-900 transition-shadow ${
+      className={`group relative cursor-pointer overflow-hidden rounded bg-neutral-900 transition-shadow ${
         selected ? "ring-2 ring-blue-500 ring-offset-1 ring-offset-neutral-950" : "hover:ring-1 hover:ring-neutral-600"
       }`}
       onClick={onClick}
@@ -42,21 +44,34 @@ export default function PhotoCard({ photo, selected, onClick, onDoubleClick }: P
         )}
       </div>
 
-      {/* Overlay badges — top-left */}
+      {/* Overlay badges — top-left: labels and status */}
       <div className="absolute left-1.5 top-1.5 flex items-center gap-1">
-        {photo.flagged && (
-          <span className="rounded bg-white/80 px-1 py-0.5 text-[10px] font-bold text-neutral-900">
-            P
-          </span>
-        )}
-        {photo.rejected && (
-          <span className="rounded bg-red-600/90 px-1 py-0.5 text-[10px] font-bold text-white">
-            X
-          </span>
-        )}
         {photo.label && LABEL_COLORS[photo.label] && (
           <span className={`h-2.5 w-2.5 rounded-full ${LABEL_COLORS[photo.label]}`} />
         )}
+      </div>
+
+      {/* Flag / Reject buttons — top-right, visible on hover or when active */}
+      <div className="absolute right-1.5 top-1.5 flex items-center gap-1 opacity-0 group-hover:opacity-100"
+           style={photo.flagged || photo.rejected ? { opacity: 1 } : undefined}>
+        <button
+          onClick={(e) => { e.stopPropagation(); onToggleFlag?.(); }}
+          className={`rounded px-1 py-0.5 text-[10px] font-bold ${
+            photo.flagged ? "bg-white/90 text-neutral-900" : "bg-black/50 text-neutral-300 hover:bg-white/80 hover:text-neutral-900"
+          }`}
+          title="Flag (P)"
+        >
+          P
+        </button>
+        <button
+          onClick={(e) => { e.stopPropagation(); onToggleReject?.(); }}
+          className={`rounded px-1 py-0.5 text-[10px] font-bold ${
+            photo.rejected ? "bg-red-600/90 text-white" : "bg-black/50 text-neutral-300 hover:bg-red-600/80 hover:text-white"
+          }`}
+          title="Reject (X)"
+        >
+          X
+        </button>
       </div>
 
       {/* Rating — bottom-left */}

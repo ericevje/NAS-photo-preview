@@ -25,7 +25,7 @@ export default function FilterBar() {
     filters.rejected !== false;
 
   return (
-    <div className="flex flex-wrap items-center gap-3 border-b border-neutral-800 bg-neutral-900/60 px-4 py-2 text-sm">
+    <div className="flex flex-wrap items-center gap-2 border-b border-neutral-800 bg-neutral-900/60 px-3 py-2 text-xs sm:gap-3 sm:px-4 sm:text-sm">
       {/* Sort */}
       <select
         value={`${filters.sort ?? "date_taken"}_${filters.order ?? "desc"}`}

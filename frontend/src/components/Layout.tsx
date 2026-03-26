@@ -6,8 +6,8 @@ import BulkActions from "./BulkActions";
 
 const VIEWS: { id: ViewMode; label: string; enabled: boolean }[] = [
   { id: "grid", label: "Grid", enabled: true },
-  { id: "timeline", label: "Timeline", enabled: false },
-  { id: "map", label: "Map", enabled: false },
+  { id: "timeline", label: "Timeline", enabled: true },
+  { id: "map", label: "Map", enabled: true },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {
@@ -18,7 +18,7 @@ export default function Layout({ children }: { children: ReactNode }) {
   return (
     <div className="flex h-screen flex-col bg-neutral-950 text-neutral-100">
       {/* Top nav */}
-      <header className="flex items-center justify-between border-b border-neutral-800 px-5 py-2.5">
+      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-800 px-4 py-2 sm:px-5 sm:py-2.5">
         <h1 className="text-lg font-semibold tracking-tight">PhotoCull</h1>
 
         {/* View tabs */}
@@ -41,14 +41,28 @@ export default function Layout({ children }: { children: ReactNode }) {
           ))}
         </nav>
 
-        {/* Stats */}
-        {stats && (
-          <div className="flex gap-3 text-xs text-neutral-500">
-            <span>{stats.total.toLocaleString()} photos</span>
-            <span>{stats.flagged} flagged</span>
-            <span>{stats.rejected} rejected</span>
-          </div>
-        )}
+        {/* Stats + Export */}
+        <div className="flex items-center gap-4">
+          {stats && (
+            <div className="hidden gap-3 text-xs text-neutral-500 sm:flex">
+              <span>{stats.total.toLocaleString()} photos</span>
+              <span>{stats.flagged} flagged</span>
+              <span>{stats.rejected} rejected</span>
+            </div>
+          )}
+          <button
+            onClick={() => usePhotoStore.getState().openImport()}
+            className="rounded bg-neutral-800 px-3 py-1 text-sm text-neutral-300 hover:bg-neutral-700 hover:text-white"
+          >
+            Import
+          </button>
+          <button
+            onClick={() => usePhotoStore.getState().openExport()}
+            className="rounded bg-neutral-800 px-3 py-1 text-sm text-neutral-300 hover:bg-neutral-700 hover:text-white"
+          >
+            Export
+          </button>
+        </div>
       </header>
 
       <FilterBar />

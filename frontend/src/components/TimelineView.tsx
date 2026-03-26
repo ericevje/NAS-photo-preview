@@ -1,16 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { usePhotoList, useUpdatePhoto } from "../hooks/usePhotos";
+import { usePhotoList } from "../hooks/usePhotos";
 import { usePhotoStore } from "../stores/photoStore";
 import type { Photo } from "../api/client";
 import PhotoCard from "./PhotoCard";
 
 const COLUMN_MIN_WIDTH = 220;
 
+interface DateGroup {
+  date: string;
+  photos: Photo[];
+}
+
+type Row =
+  | { type: "header"; date: string; count: number }
+  | { type: "photos"; photos: Photo[] };
+
 function useColumnCount(ref: React.RefObject<HTMLDivElement | null>, minWidth: number) {
   const getCount = useCallback(() => {
     if (!ref.current) return 4;
-    return Math.max(1, Math.floor(ref.current.clientWidth / minWidth));
+    return Math.max(1, Math.floor((ref.current.clientWidth - 16) / minWidth));
   }, [ref, minWidth]);
 
   const [count, setCount] = useState(4);
@@ -27,14 +36,23 @@ function useColumnCount(ref: React.RefObject<HTMLDivElement | null>, minWidth: n
   return count;
 }
 
-export default function PhotoGrid() {
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, {
+    weekday: "short",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+}
+
+export default function TimelineView() {
   const filters = usePhotoStore((s) => s.filters);
   const selectedIds = usePhotoStore((s) => s.selectedIds);
   const { select, toggleSelect, rangeSelect, openLoupe } = usePhotoStore();
 
   const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading, isError, error } =
     usePhotoList(filters);
-  const updatePhoto = useUpdatePhoto();
 
   const allPhotos = useMemo(
     () => data?.pages.flatMap((p) => p.photos) ?? [],
@@ -46,22 +64,41 @@ export default function PhotoGrid() {
   const containerRef = useRef<HTMLDivElement>(null);
   const columnCount = useColumnCount(containerRef, COLUMN_MIN_WIDTH);
 
-  const rows = useMemo(() => {
-    const result: Photo[][] = [];
-    for (let i = 0; i < allPhotos.length; i += columnCount) {
-      result.push(allPhotos.slice(i, i + columnCount));
+  // Group photos by date (day)
+  const groups = useMemo<DateGroup[]>(() => {
+    const map = new Map<string, Photo[]>();
+    for (const photo of allPhotos) {
+      const day = photo.date_taken ? photo.date_taken.slice(0, 10) : "Unknown";
+      let arr = map.get(day);
+      if (!arr) {
+        arr = [];
+        map.set(day, arr);
+      }
+      arr.push(photo);
+    }
+    return Array.from(map.entries()).map(([date, photos]) => ({ date, photos }));
+  }, [allPhotos]);
+
+  // Build virtual rows: header + photo grid rows per group
+  const rows = useMemo<Row[]>(() => {
+    const result: Row[] = [];
+    for (const group of groups) {
+      result.push({ type: "header", date: group.date, count: group.photos.length });
+      for (let i = 0; i < group.photos.length; i += columnCount) {
+        result.push({ type: "photos", photos: group.photos.slice(i, i + columnCount) });
+      }
     }
     return result;
-  }, [allPhotos, columnCount]);
+  }, [groups, columnCount]);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => containerRef.current,
-    estimateSize: () => 180,
+    estimateSize: (index) => (rows[index].type === "header" ? 36 : 180),
     overscan: 5,
   });
 
-  // Infinite scroll: load more when near the end
+  // Infinite scroll
   const items = virtualizer.getVirtualItems();
   useEffect(() => {
     const lastItem = items[items.length - 1];
@@ -109,7 +146,7 @@ export default function PhotoGrid() {
     return (
       <div className="flex h-64 flex-col items-center justify-center gap-2 text-neutral-500">
         <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-neutral-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909M3.75 21h16.5A2.25 2.25 0 0 0 22.5 18.75V5.25A2.25 2.25 0 0 0 20.25 3H3.75A2.25 2.25 0 0 0 1.5 5.25v13.5A2.25 2.25 0 0 0 3.75 21Z" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" />
         </svg>
         <span className="text-sm">No photos match the current filters.</span>
       </div>
@@ -124,6 +161,28 @@ export default function PhotoGrid() {
       >
         {virtualizer.getVirtualItems().map((virtualRow) => {
           const row = rows[virtualRow.index];
+
+          if (row.type === "header") {
+            return (
+              <div
+                key={`h-${virtualRow.index}`}
+                className="absolute left-0 right-0 flex items-center gap-3 border-b border-neutral-800 bg-neutral-950/90 px-2 py-1.5 backdrop-blur-sm"
+                style={{
+                  top: virtualRow.start,
+                  height: virtualRow.size,
+                  zIndex: 10,
+                }}
+                ref={virtualizer.measureElement}
+                data-index={virtualRow.index}
+              >
+                <span className="text-sm font-medium text-neutral-300">
+                  {row.date === "Unknown" ? "Unknown date" : formatDate(row.date)}
+                </span>
+                <span className="text-xs text-neutral-600">{row.count} photos</span>
+              </div>
+            );
+          }
+
           return (
             <div
               key={virtualRow.index}
@@ -136,15 +195,13 @@ export default function PhotoGrid() {
               ref={virtualizer.measureElement}
               data-index={virtualRow.index}
             >
-              {row.map((photo) => (
+              {row.photos.map((photo) => (
                 <PhotoCard
                   key={photo.id}
                   photo={photo}
                   selected={selectedIds.has(photo.id)}
                   onClick={(e) => handleClick(e, photo.id)}
                   onDoubleClick={() => openLoupe(photo.id)}
-                  onToggleFlag={() => updatePhoto.mutate({ id: photo.id, updates: { flagged: !photo.flagged } })}
-                  onToggleReject={() => updatePhoto.mutate({ id: photo.id, updates: { rejected: !photo.rejected } })}
                 />
               ))}
             </div>

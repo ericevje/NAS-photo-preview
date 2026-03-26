@@ -7,6 +7,7 @@ everything to the SQLite database.
 
 import io
 import sqlite3
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from pathlib import Path
@@ -169,6 +170,7 @@ def index_photos(
     thumbs_dir: Path,
     incremental: bool = False,
     workers: int = 4,
+    progress_callback: Callable[[int, int, int, bool], None] | None = None,
 ) -> tuple[int, int]:
     """Index photos from source directories into the database.
 
@@ -178,6 +180,8 @@ def index_photos(
         thumbs_dir: Directory to store generated thumbnails.
         incremental: If True, skip files that haven't changed since last index.
         workers: Number of parallel worker threads for thumbnail extraction.
+        progress_callback: Optional callback(processed, skipped, total, done)
+            invoked after each file completes. When None, tqdm is used instead.
 
     Returns:
         Tuple of (processed_count, skipped_count).
@@ -186,6 +190,8 @@ def index_photos(
 
     all_files = _collect_files(source_dirs)
     if not all_files:
+        if progress_callback:
+            progress_callback(0, 0, 0, True)
         return 0, 0
 
     # Filter for incremental mode
@@ -202,29 +208,47 @@ def index_photos(
         skipped = 0
 
     if not files_to_process:
+        if progress_callback:
+            progress_callback(0, skipped, 0, True)
         return 0, skipped
 
+    total = len(files_to_process)
     processed = 0
+    completed = 0
     batch_size = 200
     pending = 0
+
+    if progress_callback:
+        progress_callback(0, skipped, total, False)
+
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
             executor.submit(_process_single_file, f, thumbs_dir): f
             for f in files_to_process
         }
-        with tqdm(total=len(files_to_process), desc="Indexing", unit="photo") as pbar:
-            for future in as_completed(futures):
-                result = future.result()
-                if result is not None:
-                    upsert_photo(db_conn, result, commit=False)
-                    processed += 1
-                    pending += 1
-                    if pending >= batch_size:
-                        db_conn.commit()
-                        pending = 0
+        pbar = tqdm(total=total, desc="Indexing", unit="photo") if not progress_callback else None
+        for future in as_completed(futures):
+            result = future.result()
+            if result is not None:
+                upsert_photo(db_conn, result, commit=False)
+                processed += 1
+                pending += 1
+                if pending >= batch_size:
+                    db_conn.commit()
+                    pending = 0
+            completed += 1
+            if pbar:
                 pbar.update(1)
+            if progress_callback:
+                progress_callback(processed, skipped, total, False)
+        if pbar:
+            pbar.close()
+
     # Commit any remaining batch
     if pending > 0:
         db_conn.commit()
+
+    if progress_callback:
+        progress_callback(processed, skipped, total, True)
 
     return processed, skipped

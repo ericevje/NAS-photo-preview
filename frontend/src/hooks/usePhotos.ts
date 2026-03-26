@@ -27,7 +27,7 @@ export function useUpdatePhoto() {
     mutationFn: ({ id, updates }: { id: number; updates: PhotoUpdate }) =>
       updatePhoto(id, updates),
     onSuccess: (updated) => {
-      // Optimistically patch the photo in all cached pages
+      // Patch the photo in all cached pages
       qc.setQueriesData<ReturnType<typeof usePhotoList>["data"]>(
         { queryKey: ["photos"] },
         (old) => {
@@ -41,6 +41,11 @@ export function useUpdatePhoto() {
           };
         },
       );
+      // Invalidate all photo queries so filtered views refetch
+      // (e.g. unflagging a photo removes it from the "flagged" filter cache)
+      qc.invalidateQueries({ queryKey: ["photos"] });
+      // Refresh stats so header counts update
+      qc.invalidateQueries({ queryKey: ["stats"] });
     },
   });
 }
@@ -52,6 +57,7 @@ export function useBatchUpdatePhotos() {
       batchUpdatePhotos(ids, updates),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["photos"] });
+      qc.invalidateQueries({ queryKey: ["stats"] });
     },
   });
 }

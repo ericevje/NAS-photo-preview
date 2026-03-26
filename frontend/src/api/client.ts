@@ -142,3 +142,128 @@ export async function getStats(): Promise<Stats> {
 export async function getFolders(): Promise<FolderInfo[]> {
   return fetchJson<FolderInfo[]>("/folders");
 }
+
+// ---------------------------------------------------------------------------
+// Export
+// ---------------------------------------------------------------------------
+
+export interface ExportFilters {
+  date_from?: string;
+  date_to?: string;
+  has_gps?: boolean;
+  rating_min?: number;
+  label?: string;
+  flagged?: boolean;
+  rejected?: boolean;
+  folder?: string;
+}
+
+export interface ExportCountResponse {
+  count: number;
+}
+
+export interface ExportCopyResponse {
+  job_id: string;
+  total: number;
+}
+
+export interface ExportJobStatus {
+  status: "running" | "done";
+  total: number;
+  copied: number;
+  failed: number;
+  dest: string;
+}
+
+export async function getExportCount(
+  filters?: ExportFilters,
+  photoIds?: number[],
+): Promise<ExportCountResponse> {
+  return fetchJson<ExportCountResponse>("/export/count", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filters: filters ?? null, photo_ids: photoIds ?? null }),
+  });
+}
+
+export async function downloadExportList(
+  filters?: ExportFilters,
+  photoIds?: number[],
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/export/list`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filters: filters ?? null, photo_ids: photoIds ?? null }),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "export-paths.txt";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+export async function startExportCopy(
+  dest: string,
+  filters?: ExportFilters,
+  photoIds?: number[],
+  includeXmp: boolean = true,
+): Promise<ExportCopyResponse> {
+  return fetchJson<ExportCopyResponse>("/export/copy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      filters: filters ?? null,
+      photo_ids: photoIds ?? null,
+      dest,
+      include_xmp: includeXmp,
+    }),
+  });
+}
+
+export async function getExportStatus(jobId: string): Promise<ExportJobStatus> {
+  return fetchJson<ExportJobStatus>(`/export/status/${jobId}`);
+}
+
+export async function getExportDefaultDest(): Promise<{ path: string }> {
+  return fetchJson<{ path: string }>("/export/default-dest");
+}
+
+export async function browseForFolder(): Promise<{ path: string | null }> {
+  return fetchJson<{ path: string | null }>("/export/browse", { method: "POST" });
+}
+
+// ---------------------------------------------------------------------------
+// Import
+// ---------------------------------------------------------------------------
+
+export interface ImportJobStatus {
+  status: "idle" | "running" | "done" | "error";
+  phase?: "scanning" | "indexing" | "done" | "error";
+  source_dir?: string;
+  processed?: number;
+  skipped?: number;
+  total?: number;
+  error?: string | null;
+}
+
+export async function browseForImportFolder(): Promise<{ path: string | null }> {
+  return fetchJson<{ path: string | null }>("/import/browse", { method: "POST" });
+}
+
+export async function startImport(
+  sourceDir: string,
+  incremental: boolean = true,
+): Promise<{ status: string; source_dir: string }> {
+  return fetchJson<{ status: string; source_dir: string }>("/import/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source_dir: sourceDir, incremental }),
+  });
+}
+
+export async function getImportStatus(): Promise<ImportJobStatus> {
+  return fetchJson<ImportJobStatus>("/import/status");
+}
