@@ -13,6 +13,7 @@ const LABEL_COLORS: Record<string, string> = {
 export default function BulkActions() {
   const selectedIds = usePhotoStore((s) => s.selectedIds);
   const clearSelection = usePhotoStore((s) => s.clearSelection);
+  const openDuel = usePhotoStore((s) => s.openDuel);
   const batchUpdate = useBatchUpdatePhotos();
 
   if (selectedIds.size < 2) return null;
@@ -68,6 +69,13 @@ export default function BulkActions() {
         className="rounded px-2 py-0.5 text-red-400 hover:bg-neutral-700"
       >
         Reject all
+      </button>
+
+      <button
+        onClick={() => openDuel([...selectedIds])}
+        className="rounded px-2 py-0.5 text-neutral-300 hover:bg-neutral-700"
+      >
+        Compare
       </button>
 
       <button

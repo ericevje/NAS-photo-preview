@@ -5,6 +5,7 @@ import MapView from "./components/MapView";
 import LoupeView from "./components/LoupeView";
 import ExportPanel from "./components/ExportPanel";
 import ImportPanel from "./components/ImportPanel";
+import DuelView from "./components/DuelView";
 import { usePhotoStore } from "./stores/photoStore";
 
 function App() {
@@ -14,6 +15,7 @@ function App() {
   const closeExport = usePhotoStore((s) => s.closeExport);
   const importOpen = usePhotoStore((s) => s.importOpen);
   const closeImport = usePhotoStore((s) => s.closeImport);
+  const duelOpen = usePhotoStore((s) => s.duelOpen);
 
   return (
     <Layout>
@@ -23,6 +25,7 @@ function App() {
       {loupePhotoId !== null && <LoupeView />}
       {exportOpen && <ExportPanel onClose={closeExport} />}
       {importOpen && <ImportPanel onClose={closeImport} />}
+      {duelOpen && <DuelView />}
     </Layout>
   );
 }

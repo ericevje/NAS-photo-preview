@@ -32,6 +32,12 @@ interface PhotoStore {
   openImport: () => void;
   closeImport: () => void;
 
+  // Duel mode
+  duelOpen: boolean;
+  duelPhotoIds: number[];
+  openDuel: (ids: number[]) => void;
+  closeDuel: () => void;
+
   // Filters
   filters: PhotoFilters;
   setFilters: (f: Partial<PhotoFilters>) => void;
@@ -84,6 +90,11 @@ export const usePhotoStore = create<PhotoStore>((set) => ({
   importOpen: false,
   openImport: () => set({ importOpen: true }),
   closeImport: () => set({ importOpen: false }),
+
+  duelOpen: false,
+  duelPhotoIds: [],
+  openDuel: (ids) => set({ duelOpen: true, duelPhotoIds: ids }),
+  closeDuel: () => set({ duelOpen: false, duelPhotoIds: [] }),
 
   filters: { ...DEFAULT_FILTERS },
   setFilters: (f) => set((s) => ({ filters: { ...s.filters, ...f } })),
