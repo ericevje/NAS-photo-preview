@@ -63,6 +63,15 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    # Cleanup on shutdown: delete thumbnails and database
+    thumbs_dir = Path(_thumbs_path)
+    if thumbs_dir.is_dir():
+        shutil.rmtree(thumbs_dir, ignore_errors=True)
+
+    db_file = Path(_db_path)
+    if db_file.is_file():
+        db_file.unlink(missing_ok=True)
+
 
 app = FastAPI(title="PhotoCull", version="0.1.0", lifespan=lifespan)
 
